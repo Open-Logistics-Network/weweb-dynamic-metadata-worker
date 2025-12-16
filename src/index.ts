@@ -217,11 +217,21 @@ class CustomHeaderHandler {
           break;
       }
 
-      // Remove existing noindex meta tags only if the record is published
+      // Handle robots meta tags based on is_published status
       const robots = element.getAttribute("name");
-      if (robots === "robots" && element.getAttribute("content") === "noindex" && this.metadata.is_published === true) {
-        console.log('Removing existing noindex tag (record is published)');
-        element.remove();
+      if (robots === "robots") {
+        if (this.metadata.is_published === false) {
+          // For unpublished: remove any robots tag (we already injected noindex at the top)
+          console.log('Removing existing robots tag (keeping injected noindex for unpublished record)');
+          element.remove();
+        } else if (this.metadata.is_published === true) {
+          // For published: ensure it's set to index, follow (or remove noindex)
+          const content = element.getAttribute("content");
+          if (content === "noindex") {
+            console.log('Removing noindex tag (record is published)');
+            element.remove();
+          }
+        }
       }
 	    
     }
