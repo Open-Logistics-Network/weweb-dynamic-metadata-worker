@@ -147,6 +147,7 @@ export default {
 class CustomHeaderHandler {
   constructor(metadata) {
     this.metadata = metadata;
+    this.noindexInjected = false;
   }
 
   element(element) {
@@ -155,6 +156,14 @@ class CustomHeaderHandler {
       console.log('Replacing title tag content');
       element.setInnerContent(this.metadata.title);
     }
+
+    // Inject noindex meta tag in head if record is not published
+    if (element.tagName == "head" && this.metadata.is_published === false && !this.noindexInjected) {
+      console.log('Injecting noindex meta tag for unpublished record');
+      element.prepend('<meta name="robots" content="noindex">', { html: true });
+      this.noindexInjected = true;
+    }
+
     // Replace meta tags content
     if (element.tagName == "meta") {
       const name = element.getAttribute("name");
@@ -208,10 +217,10 @@ class CustomHeaderHandler {
           break;
       }
 
-      // Remove the noindex meta tag
+      // Remove any existing noindex meta tag (we control it based on is_published)
       const robots = element.getAttribute("name");
       if (robots === "robots" && element.getAttribute("content") === "noindex") {
-        console.log('Removing noindex tag');
+        console.log('Removing existing noindex tag');
         element.remove();
       }
 	    
