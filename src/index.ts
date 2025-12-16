@@ -217,10 +217,10 @@ class CustomHeaderHandler {
           break;
       }
 
-      // Remove any existing noindex meta tag (we control it based on is_published)
+      // Remove existing noindex meta tags only if the record is published
       const robots = element.getAttribute("name");
-      if (robots === "robots" && element.getAttribute("content") === "noindex") {
-        console.log('Removing existing noindex tag');
+      if (robots === "robots" && element.getAttribute("content") === "noindex" && this.metadata.is_published === true) {
+        console.log('Removing existing noindex tag (record is published)');
         element.remove();
       }
 	    
