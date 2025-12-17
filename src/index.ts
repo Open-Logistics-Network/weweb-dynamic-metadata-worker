@@ -148,6 +148,7 @@ class CustomHeaderHandler {
   constructor(metadata) {
     this.metadata = metadata;
     this.noindexInjected = false;
+    this.scriptLdInjected = false;
   }
 
   element(element) {
@@ -162,6 +163,19 @@ class CustomHeaderHandler {
       console.log('Injecting noindex meta tag for unpublished record');
       element.prepend('<meta name="robots" content="noindex">', { html: true });
       this.noindexInjected = true;
+    }
+
+    // Inject JSON-LD structured data script at the end of head
+    if (element.tagName == "head" && !this.scriptLdInjected) {
+      try {
+        if (this.metadata.script_ld) {
+          console.log('Injecting JSON-LD structured data script');
+          element.append(this.metadata.script_ld, { html: true });
+          this.scriptLdInjected = true;
+        }
+      } catch (error) {
+        console.error('Error injecting JSON-LD script:', error);
+      }
     }
 
     // Replace meta tags content
