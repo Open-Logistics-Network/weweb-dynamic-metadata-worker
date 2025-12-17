@@ -157,10 +157,46 @@ class CustomHeaderHandler {
       element.setInnerContent(this.metadata.title);
     }
 
-    // Inject noindex meta tag in head if record is not published
-    if (element.tagName == "head" && this.metadata.is_published === false && !this.noindexInjected) {
-      console.log('Injecting noindex meta tag for unpublished record');
-      element.prepend('<meta name="robots" content="noindex">', { html: true });
+    // Inject content into head tag
+    if (element.tagName == "head" && !this.noindexInjected) {
+      // Inject noindex meta tag if record is not published
+      if (this.metadata.is_published === false) {
+        console.log('Injecting noindex meta tag for unpublished record');
+        element.prepend('<meta name="robots" content="noindex">', { html: true });
+      }
+
+      // Inject JSON-LD structured data if metadata is available
+      if (this.metadata.identifier && this.metadata.url) {
+        console.log('Injecting JSON-LD structured data');
+        const structuredData = {
+          "@context": "https://schema.org",
+          "@type": "Warehouse",
+          "@id": this.metadata.identifier,
+          "url": this.metadata.url,
+          "name": this.metadata.name || "Logistics Location",
+          "identifier": this.metadata.identifier,
+          "description": this.metadata.description || "",
+          "address": {
+            "@type": "PostalAddress",
+            "addressLocality": this.metadata.address_city || undefined,
+            "postalCode": this.metadata.address_zip || undefined,
+            "addressCountry": this.metadata.address_country || undefined
+          },
+          "provider": {
+            "@type": "Organization",
+            "name": "Open Logistics Network"
+          }
+        };
+        
+        // Remove undefined values from address
+        Object.keys(structuredData.address).forEach(key => 
+          structuredData.address[key] === undefined && delete structuredData.address[key]
+        );
+        
+        const jsonLdScript = `<script type="application/ld+json">${JSON.stringify(structuredData, null, 2)}</script>`;
+        element.append(jsonLdScript, { html: true });
+      }
+
       this.noindexInjected = true;
     }
 
