@@ -1,5 +1,5 @@
 export const config = {
-    domainSource: "https://oln-mainapplication-repository.pages.dev",
+    domainSource: "https://32c40fd2-9294-4e8d-b573-38afaf6cd060.weweb-preview.io",
     // Your WeWeb app preview link
     patterns: [
       // {
