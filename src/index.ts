@@ -8,6 +8,13 @@ export default {
 
     console.log("Worker started");
 
+    // Prevent infinite loops - if this request was already processed by the worker, pass it through
+    if (request.headers.get('X-Worker-Processed') === 'true') {
+      console.log("Request already processed by worker, passing through");
+      const url = new URL(request.url);
+      return fetch(`${domainSource}${url.pathname}${url.search}`);
+    }
+
     // Parse the request URL
     const url = new URL(request.url);
     const referer = request.headers.get('Referer')
@@ -33,15 +40,15 @@ export default {
     async function requestMetadata(url, metaDataEndpoint) {
       // Remove any trailing slash from the URL
       const trimmedUrl = url.endsWith('/') ? url.slice(0, -1) : url;
-    
+
       // Split the trimmed URL by '/' and get the last part: The id
       const parts = trimmedUrl.split('/');
       const id = parts[parts.length - 1];
-    
+
       // Replace the placeholder in metaDataEndpoint with the actual id
       const placeholderPattern = /{([^}]+)}/;
       const metaDataEndpointWithId = metaDataEndpoint.replace(placeholderPattern, id);
-    
+
       // Fetch metadata from the API endpoint
       const metaDataResponse = await fetch(metaDataEndpointWithId);
       const metadata = await metaDataResponse.json();
@@ -53,8 +60,10 @@ export default {
     if (patternConfig) {
       console.log("Dynamic page detected:", url.pathname);
 
-      // Fetch the source page content
-      let source = await fetch(`${domainSource}${url.pathname}`);
+      // Fetch the source page content with loop prevention header
+      let source = await fetch(`${domainSource}${url.pathname}`, {
+        headers: { 'X-Worker-Processed': 'true' }
+      });
 
       // Remove "X-Robots-Tag" from the headers
       const sourceHeaders = new Headers(source.headers);
@@ -75,13 +84,15 @@ export default {
         .on('*', customHeaderHandler)
         .transform(source);
 
-    // Handle page data requests for the WeWeb app
+      // Handle page data requests for the WeWeb app
     } else if (isPageData(url.pathname)) {
-      	console.log("Page data detected:", url.pathname);
-	console.log("Referer:", referer);
+      console.log("Page data detected:", url.pathname);
+      console.log("Referer:", referer);
 
-      // Fetch the source data content
-      const sourceResponse = await fetch(`${domainSource}${url.pathname}`);
+      // Fetch the source data content with loop prevention header
+      const sourceResponse = await fetch(`${domainSource}${url.pathname}`, {
+        headers: { 'X-Worker-Processed': 'true' }
+      });
       let sourceData = await sourceResponse.json();
 
       let pathname = referer;
@@ -117,7 +128,7 @@ export default {
             sourceData.page.meta.keywords.en = metadata.keywords;
           }
 
-	  console.log("returning file: ", JSON.stringify(sourceData));
+          console.log("returning file: ", JSON.stringify(sourceData));
           // Return the modified JSON object
           return new Response(JSON.stringify(sourceData), {
             headers: { 'Content-Type': 'application/json' }
@@ -128,9 +139,10 @@ export default {
 
     // If the URL does not match any patterns, fetch and return the original content
     console.log("Fetching original content for:", url.pathname);
-    const sourceUrl = new URL(`${domainSource}${url.pathname}`);
-    const sourceRequest = new Request(sourceUrl, request);
-    const sourceResponse = await fetch(sourceRequest);
+    const sourceUrl = new URL(`${domainSource}${url.pathname}${url.search}`);
+    const sourceResponse = await fetch(sourceUrl, {
+      headers: { 'X-Worker-Processed': 'true' }
+    });
 
     // Create a new response without the "X-Robots-Tag" header
     const modifiedHeaders = new Headers(sourceResponse.headers);
@@ -247,7 +259,7 @@ class CustomHeaderHandler {
           }
         }
       }
-	    
+
     }
   }
 }
