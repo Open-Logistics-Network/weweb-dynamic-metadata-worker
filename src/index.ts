@@ -2,18 +2,12 @@ import { config } from '../config.js';
 
 export default {
   async fetch(request, env, ctx) {
+
     // Extracting configuration values
     const domainSource = config.domainSource;
     const patterns = config.patterns;
 
     console.log("Worker started");
-
-    // Prevent infinite loops - if this request was already processed by the worker, pass it through
-    if (request.headers.get('X-Worker-Processed') === 'true') {
-      console.log("Request already processed by worker, passing through");
-      const url = new URL(request.url);
-      return fetch(`${domainSource}${url.pathname}${url.search}`);
-    }
 
     // Parse the request URL
     const url = new URL(request.url);
@@ -60,9 +54,9 @@ export default {
     if (patternConfig) {
       console.log("Dynamic page detected:", url.pathname);
 
-      // Fetch the source page content with loop prevention header
+      // Fetch the source page content - don't follow redirects to prevent loops
       let source = await fetch(`${domainSource}${url.pathname}`, {
-        headers: { 'X-Worker-Processed': 'true' }
+        redirect: 'manual'
       });
 
       // Remove "X-Robots-Tag" from the headers
@@ -89,9 +83,9 @@ export default {
       console.log("Page data detected:", url.pathname);
       console.log("Referer:", referer);
 
-      // Fetch the source data content with loop prevention header
+      // Fetch the source data content - don't follow redirects
       const sourceResponse = await fetch(`${domainSource}${url.pathname}`, {
-        headers: { 'X-Worker-Processed': 'true' }
+        redirect: 'manual'
       });
       let sourceData = await sourceResponse.json();
 
@@ -141,7 +135,7 @@ export default {
     console.log("Fetching original content for:", url.pathname);
     const sourceUrl = new URL(`${domainSource}${url.pathname}${url.search}`);
     const sourceResponse = await fetch(sourceUrl, {
-      headers: { 'X-Worker-Processed': 'true' }
+      redirect: 'manual'
     });
 
     // Create a new response without the "X-Robots-Tag" header
