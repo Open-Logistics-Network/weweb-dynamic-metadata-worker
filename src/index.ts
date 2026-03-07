@@ -92,7 +92,7 @@ export default {
       sourceHeaders.set('x-metadata-status', metadata ? 'success' : 'missing');
 
       const canonicalUrl = `https://www.openlogistics.network${url.pathname}${url.pathname.endsWith('/') ? '' : '/'}`;
-      const customHeaderHandler = new CustomHeaderHandler(metadata, canonicalUrl);
+      const customHeaderHandler = new CustomHeaderHandler(metadata, canonicalUrl, domainSource, url.pathname);
 
       // Transform the source HTML with the custom headers
       console.log("Transforming HTML with HTMLRewriter");
@@ -186,6 +186,35 @@ export default {
       }
     }
 
+    const contentType = sourceResponse.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      console.log("Transforming static HTML to remove staging domains");
+      const domainSourceHost = new URL(domainSource).host;
+      const prodHost = 'www.openlogistics.network';
+
+      const stagingScrubber = {
+        element(element: any) {
+          for (const attr of ['href', 'content', 'src']) {
+            const val = element.getAttribute(attr);
+            if (val && val.includes(domainSourceHost)) {
+              element.setAttribute(attr, val.replace(domainSourceHost, prodHost));
+            }
+          }
+        }
+      };
+
+      return new HTMLRewriter()
+        .on('link', stagingScrubber)
+        .on('meta', stagingScrubber)
+        .on('a', stagingScrubber)
+        .on('img', stagingScrubber)
+        .on('script', stagingScrubber)
+        .transform(new Response(sourceResponse.body, {
+          status: sourceResponse.status,
+          headers: modifiedHeaders,
+        }));
+    }
+
     return new Response(sourceResponse.body, {
       status: sourceResponse.status,
       headers: modifiedHeaders,
@@ -211,13 +240,17 @@ const CONFLICTING_ITEMPROPS = ["name", "description", "image"];
 class CustomHeaderHandler {
   metadata: any;
   canonicalUrl: string | null;
+  domainSource: string | null;
+  currentPathname: string | null;
   noindexInjected: boolean;
   scriptLdInjected: boolean;
   metaInjected: boolean;
 
-  constructor(metadata: any, canonicalUrl: string | null = null) {
+  constructor(metadata: any, canonicalUrl: string | null = null, domainSource: string | null = null, currentPathname: string | null = null) {
     this.metadata = metadata;
     this.canonicalUrl = canonicalUrl;
+    this.domainSource = domainSource;
+    this.currentPathname = currentPathname;
     this.noindexInjected = false;
     this.scriptLdInjected = false;
     this.metaInjected = false;
@@ -290,12 +323,26 @@ class CustomHeaderHandler {
       return;
     }
 
-    // --- <link rel="canonical">: remove existing so our injected one is the only one ---
+    // --- <link>: handle canonical and hreflang alternate tags ---
     if (element.tagName === "link") {
       const rel = element.getAttribute("rel");
       if (rel === "canonical" && this.canonicalUrl) {
         element.remove();
         return;
+      }
+      // Rewrite hreflang alternate links: replace preview domain with production domain
+      // and replace :param placeholder with the actual location ID
+      if (rel === "alternate" && this.domainSource && this.currentPathname) {
+        const href = element.getAttribute("href");
+        if (href && href.includes(this.domainSource)) {
+          const pathParts = this.currentPathname.split('/').filter((p: string) => p !== '');
+          const locationId = pathParts[pathParts.length - 1];
+          const newHref = href
+            .replace(this.domainSource, 'https://www.openlogistics.network')
+            .replace(':param', locationId);
+          element.setAttribute("href", newHref);
+          return;
+        }
       }
     }
 
