@@ -203,12 +203,20 @@ export default {
         }
       };
 
+      const canonicalUrl = `https://www.openlogistics.network${url.pathname}${url.pathname.endsWith('/') ? '' : '/'}`;
+      const canonicalInjector = {
+        element(element: any) {
+          element.append(`<link rel="canonical" href="${canonicalUrl}"/>`, { html: true });
+        }
+      };
+
       return new HTMLRewriter()
         .on('link', stagingScrubber)
         .on('meta', stagingScrubber)
         .on('a', stagingScrubber)
         .on('img', stagingScrubber)
         .on('script', stagingScrubber)
+        .on('head', canonicalInjector)
         .transform(new Response(sourceResponse.body, {
           status: sourceResponse.status,
           headers: modifiedHeaders,
