@@ -11,6 +11,13 @@ export default {
 
     // Parse the request URL
     const url = new URL(request.url);
+
+    // Redirect HTTP → HTTPS
+    if (url.protocol === 'http:') {
+      url.protocol = 'https:';
+      return Response.redirect(url.toString(), 301);
+    }
+
     const referer = request.headers.get('Referer')
 
     // Function to get the pattern configuration that matches the URL
