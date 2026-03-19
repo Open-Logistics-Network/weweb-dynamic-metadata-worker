@@ -210,6 +210,29 @@ export default {
         }
       };
 
+      // Detect language from URL path (e.g. /en/, /de/)
+      const pathParts = url.pathname.split('/').filter((p: string) => p !== '');
+      const lang = pathParts[0] || 'en';
+      const noscriptCopy: Record<string, { h1: string; p: string }> = {
+        en: { h1: 'Open Logistics Network', p: 'Digital 3PL marketplace connecting shippers with global warehouse capacity. Enable JavaScript to explore our platform.' },
+        de: { h1: 'Open Logistics Network', p: 'Digitaler 3PL-Marktplatz, der Verlader mit weltweiten Lagerkapazitäten verbindet. Aktivieren Sie JavaScript, um unsere Plattform zu erkunden.' },
+        es: { h1: 'Open Logistics Network', p: 'Marketplace digital 3PL que conecta cargadores con capacidad de almacenamiento global. Active JavaScript para explorar nuestra plataforma.' },
+        fr: { h1: 'Open Logistics Network', p: 'Marketplace 3PL numérique reliant les expéditeurs aux capacités d\'entrepôt mondiales. Activez JavaScript pour explorer notre plateforme.' },
+        pt: { h1: 'Open Logistics Network', p: 'Marketplace digital 3PL conectando embarcadores com capacidade de armazém global. Ative o JavaScript para explorar nossa plataforma.' },
+        it: { h1: 'Open Logistics Network', p: 'Marketplace digitale 3PL che collega spedizionieri con capacità di magazzino globale. Abilita JavaScript per esplorare la nostra piattaforma.' },
+        ja: { h1: 'Open Logistics Network', p: 'シッパーと世界の倉庫キャパシティをつなぐデジタル3PLマーケットプレイス。プラットフォームを利用するにはJavaScriptを有効にしてください。' },
+        pl: { h1: 'Open Logistics Network', p: 'Cyfrowy marketplace 3PL łączący nadawców z globalną pojemnością magazynową. Włącz JavaScript, aby korzystać z naszej platformy.' },
+      };
+      const copy = noscriptCopy[lang] || noscriptCopy['en'];
+      const noscriptInjector = {
+        element(element: any) {
+          element.setInnerContent(
+            `<h1>${copy.h1}</h1><p>${copy.p}</p>`,
+            { html: true }
+          );
+        }
+      };
+
       return new HTMLRewriter()
         .on('link', stagingScrubber)
         .on('meta', stagingScrubber)
@@ -217,6 +240,7 @@ export default {
         .on('img', stagingScrubber)
         .on('script', stagingScrubber)
         .on('head', canonicalInjector)
+        .on('noscript', noscriptInjector)
         .transform(new Response(sourceResponse.body, {
           status: sourceResponse.status,
           headers: modifiedHeaders,
@@ -328,6 +352,17 @@ class CustomHeaderHandler {
         }
       }
 
+      return;
+    }
+
+    // --- <noscript>: inject text content so Googlebot doesn't see an empty body ---
+    if (element.tagName === 'noscript') {
+      const m = this.metadata || {};
+      const title = m.title ? escapeHtml(m.title) : 'Open Logistics Network';
+      const description = m.description ? escapeHtml(m.description) : '';
+      let content = `<h1>${title}</h1>`;
+      if (description) content += `<p>${description}</p>`;
+      element.setInnerContent(content, { html: true });
       return;
     }
 
