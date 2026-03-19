@@ -240,6 +240,15 @@ export default {
         }
       };
 
+      const appContentInjector = {
+        element(element: any) {
+          element.setInnerContent(
+            `<h1>${copy.h1}</h1><p>${copy.p}</p>`,
+            { html: true }
+          );
+        }
+      };
+
       return new HTMLRewriter()
         .on('link', stagingScrubber)
         .on('meta', stagingScrubber)
@@ -248,6 +257,7 @@ export default {
         .on('script', stagingScrubber)
         .on('head', canonicalInjector)
         .on('noscript', noscriptInjector)
+        .on('[id="app"]', appContentInjector)
         .transform(new Response(sourceResponse.body, {
           status: sourceResponse.status,
           headers: modifiedHeaders,
@@ -359,6 +369,17 @@ class CustomHeaderHandler {
         }
       }
 
+      return;
+    }
+
+    // --- <div id="app">: pre-fill with metadata so Google sees content before Vue mounts ---
+    if (element.tagName === 'div' && element.getAttribute('id') === 'app') {
+      const m = this.metadata || {};
+      const title = m.title ? escapeHtml(m.title) : 'Open Logistics Network';
+      const description = m.description ? escapeHtml(m.description) : '';
+      let content = `<h1>${title}</h1>`;
+      if (description) content += `<p>${description}</p>`;
+      element.setInnerContent(content, { html: true });
       return;
     }
 
