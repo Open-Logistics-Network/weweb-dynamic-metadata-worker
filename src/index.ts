@@ -240,16 +240,38 @@ export default {
         }
       };
 
+      // Capture actual <title> and <meta description> from WeWeb source HTML
+      // so we can use page-specific content in the <div id="app"> pre-fill
+      const capturedMeta = { title: '', description: '' };
+      const titleCapture = {
+        text(text: any) { capturedMeta.title += text.text; }
+      };
+      const metaDescriptionCapture = {
+        element(element: any) {
+          if (element.getAttribute('name') === 'description') {
+            capturedMeta.description = element.getAttribute('content') || '';
+          }
+        }
+      };
+
       const appContentInjector = {
         element(element: any) {
+          const h1Text = capturedMeta.title || copy.h1;
+          const pText = capturedMeta.description || copy.p;
           element.setInnerContent(
-            `<h1>${copy.h1}</h1><p>${copy.p}</p>`,
+            `<style>@keyframes seoFadeIn{from{opacity:0}to{opacity:1}}</style>` +
+            `<div style="opacity:0;animation:seoFadeIn .3s ease-in 2s forwards;font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
+              `<h1 style="font-size:1.5rem;margin-bottom:0.5em">${escapeHtml(h1Text)}</h1>` +
+              `<p style="color:#555;line-height:1.5">${escapeHtml(pText)}</p>` +
+            `</div>`,
             { html: true }
           );
         }
       };
 
       return new HTMLRewriter()
+        .on('title', titleCapture)
+        .on('meta', metaDescriptionCapture)
         .on('link', stagingScrubber)
         .on('meta', stagingScrubber)
         .on('a', stagingScrubber)
@@ -377,9 +399,14 @@ class CustomHeaderHandler {
       const m = this.metadata || {};
       const title = m.title ? escapeHtml(m.title) : 'Open Logistics Network';
       const description = m.description ? escapeHtml(m.description) : '';
-      let content = `<h1>${title}</h1>`;
-      if (description) content += `<p>${description}</p>`;
-      element.setInnerContent(content, { html: true });
+      element.setInnerContent(
+        `<style>@keyframes seoFadeIn{from{opacity:0}to{opacity:1}}</style>` +
+        `<div style="opacity:0;animation:seoFadeIn .3s ease-in 2s forwards;font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
+          `<h1 style="font-size:1.5rem;margin-bottom:0.5em">${title}</h1>` +
+          (description ? `<p style="color:#555;line-height:1.5">${description}</p>` : '') +
+        `</div>`,
+        { html: true }
+      );
       return;
     }
 
