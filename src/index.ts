@@ -258,12 +258,12 @@ export default {
         element(element: any) {
           const h1Text = capturedMeta.title || copy.h1;
           const pText = capturedMeta.description || copy.p;
-          element.setInnerContent(
-            `<style>@keyframes seoFadeIn{from{opacity:0}to{opacity:1}}</style>` +
-            `<div style="opacity:0;animation:seoFadeIn .3s ease-in 2s forwards;font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
+          element.before(
+            `<div id="seo-prerender" style="font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
               `<h1 style="font-size:1.5rem;margin-bottom:0.5em">${escapeHtml(h1Text)}</h1>` +
               `<p style="color:#555;line-height:1.5">${escapeHtml(pText)}</p>` +
-            `</div>`,
+            `</div>` +
+            `<script>document.getElementById('seo-prerender').style.display='none'</script>`,
             { html: true }
           );
         }
@@ -394,19 +394,18 @@ class CustomHeaderHandler {
       return;
     }
 
-    // --- <div id="app">: pre-fill with metadata so Google sees content before Vue mounts ---
+    // --- <div id="app">: inject visible SEO content before it, hidden instantly by inline script ---
     if (element.tagName === 'div' && element.getAttribute('id') === 'app') {
       const m = this.metadata || {};
       const title = m.title ? escapeHtml(m.title) : 'Open Logistics Network';
       const description = m.description ? escapeHtml(m.description) : '';
-      element.setInnerContent(
-        `<style>@keyframes seoFadeIn{from{opacity:0}to{opacity:1}}</style>` +
-        `<div style="opacity:0;animation:seoFadeIn .3s ease-in 2s forwards;font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
+      let prerender =
+        `<div id="seo-prerender" style="font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
           `<h1 style="font-size:1.5rem;margin-bottom:0.5em">${title}</h1>` +
           (description ? `<p style="color:#555;line-height:1.5">${description}</p>` : '') +
-        `</div>`,
-        { html: true }
-      );
+        `</div>` +
+        `<script>document.getElementById('seo-prerender').style.display='none'</script>`;
+      element.before(prerender, { html: true });
       return;
     }
 
