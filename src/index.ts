@@ -12,6 +12,10 @@ export default {
     // Parse the request URL
     const url = new URL(request.url);
 
+    // Dynamic rendering: detect search engine crawlers
+    const ua = request.headers.get('user-agent') || '';
+    const isBot = /googlebot|bingbot|yandex|baiduspider|duckduckbot|slurp|facebookexternalhit|twitterbot|linkedinbot/i.test(ua);
+
     // Redirect HTTP → HTTPS
     if (url.protocol === 'http:') {
       url.protocol = 'https:';
@@ -99,7 +103,7 @@ export default {
       sourceHeaders.set('x-metadata-status', metadata ? 'success' : 'missing');
 
       const canonicalUrl = `https://www.openlogistics.network${url.pathname}${url.pathname.endsWith('/') ? '' : '/'}`;
-      const customHeaderHandler = new CustomHeaderHandler(metadata, canonicalUrl, domainSource, url.pathname);
+      const customHeaderHandler = new CustomHeaderHandler(metadata, canonicalUrl, domainSource, url.pathname, isBot);
 
       // Transform the source HTML with the custom headers
       console.log("Transforming HTML with HTMLRewriter");
@@ -256,14 +260,14 @@ export default {
 
       const appContentInjector = {
         element(element: any) {
+          if (!isBot) return;
           const h1Text = capturedMeta.title || copy.h1;
           const pText = capturedMeta.description || copy.p;
-          element.before(
+          element.prepend(
             `<div id="seo-prerender" style="font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
               `<h1 style="font-size:1.5rem;margin-bottom:0.5em">${escapeHtml(h1Text)}</h1>` +
               `<p style="color:#555;line-height:1.5">${escapeHtml(pText)}</p>` +
-            `</div>` +
-            `<script>document.getElementById('seo-prerender').style.display='none'</script>`,
+            `</div>`,
             { html: true }
           );
         }
@@ -316,8 +320,9 @@ class CustomHeaderHandler {
   noindexInjected: boolean;
   scriptLdInjected: boolean;
   metaInjected: boolean;
+  isBot: boolean;
 
-  constructor(metadata: any, canonicalUrl: string | null = null, domainSource: string | null = null, currentPathname: string | null = null) {
+  constructor(metadata: any, canonicalUrl: string | null = null, domainSource: string | null = null, currentPathname: string | null = null, isBot: boolean = false) {
     this.metadata = metadata;
     this.canonicalUrl = canonicalUrl;
     this.domainSource = domainSource;
@@ -325,6 +330,7 @@ class CustomHeaderHandler {
     this.noindexInjected = false;
     this.scriptLdInjected = false;
     this.metaInjected = false;
+    this.isBot = isBot;
   }
 
   element(element: any) {
@@ -394,8 +400,9 @@ class CustomHeaderHandler {
       return;
     }
 
-    // --- <div id="app">: inject visible SEO content before it, hidden instantly by inline script ---
+    // --- <div id="app">: prepend SEO content inside it for bots; Vue replaces on mount ---
     if (element.tagName === 'div' && element.getAttribute('id') === 'app') {
+      if (!this.isBot) return;
       const m = this.metadata || {};
       const title = m.title ? escapeHtml(m.title) : 'Open Logistics Network';
       const description = m.description ? escapeHtml(m.description) : '';
@@ -403,9 +410,8 @@ class CustomHeaderHandler {
         `<div id="seo-prerender" style="font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px">` +
           `<h1 style="font-size:1.5rem;margin-bottom:0.5em">${title}</h1>` +
           (description ? `<p style="color:#555;line-height:1.5">${description}</p>` : '') +
-        `</div>` +
-        `<script>document.getElementById('seo-prerender').style.display='none'</script>`;
-      element.before(prerender, { html: true });
+        `</div>`;
+      element.prepend(prerender, { html: true });
       return;
     }
 
