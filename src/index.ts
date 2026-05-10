@@ -200,15 +200,15 @@ export default {
     const contentType = sourceResponse.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
       console.log("Transforming static HTML to remove staging domains");
-      const domainSourceHost = new URL(domainSource).host;
-      const prodHost = 'www.openlogistics.network';
 
       const stagingScrubber = {
         element(element: any) {
           for (const attr of ['href', 'content', 'src']) {
             const val = element.getAttribute(attr);
-            if (val && val.includes(domainSourceHost)) {
-              element.setAttribute(attr, val.replace(domainSourceHost, prodHost));
+            if (!val) continue;
+            const replaced = val.replace(WEWEB_HOST_RE, PROD_HOST);
+            if (replaced !== val) {
+              element.setAttribute(attr, replaced);
             }
           }
         }
@@ -306,6 +306,12 @@ function escapeHtml(str: string): string {
     .replace(/>/g, '&gt;');
 }
 
+// Matches both WeWeb staging hosts that appear in source HTML:
+//   <uuid>-production.weweb.io   (configured domainSource)
+//   <uuid>.weweb-preview.io      (emitted in hreflang alternates)
+const WEWEB_HOST_RE = /32c40fd2-9294-4e8d-b573-38afaf6cd060[\w.-]*\.weweb(-preview)?\.io/g;
+const PROD_HOST = 'www.openlogistics.network';
+
 // Meta tag attributes that we inject — used to remove existing duplicates
 const CONFLICTING_NAMES = ["title", "description", "keywords", "image", "twitter:title", "twitter:description", "twitter:image"];
 const CONFLICTING_PROPERTIES = ["og:title", "og:description", "og:image"];
@@ -320,6 +326,8 @@ class CustomHeaderHandler {
   noindexInjected: boolean;
   scriptLdInjected: boolean;
   metaInjected: boolean;
+  hintsInjected: boolean;
+  titleLockInjected: boolean;
   isBot: boolean;
 
   constructor(metadata: any, canonicalUrl: string | null = null, domainSource: string | null = null, currentPathname: string | null = null, isBot: boolean = false) {
@@ -330,6 +338,8 @@ class CustomHeaderHandler {
     this.noindexInjected = false;
     this.scriptLdInjected = false;
     this.metaInjected = false;
+    this.hintsInjected = false;
+    this.titleLockInjected = false;
     this.isBot = isBot;
   }
 
@@ -338,6 +348,18 @@ class CustomHeaderHandler {
 
     // --- <head>: inject all meta tags and structured data ---
     if (element.tagName == "head") {
+      // Resource hints: preconnect to Xano (image+API host) and preload the LCP image.
+      // Prepended so they land near the top of <head>, before scripts that delay discovery.
+      if (!this.hintsInjected) {
+        let hints = '<link rel="preconnect" href="https://xxgx-bhd0-k4hs.f2.xano.io" crossorigin />';
+        if (this.metadata && this.metadata.image) {
+          const img = escapeHtml(this.metadata.image);
+          hints += `<link rel="preload" as="image" href="${img}" fetchpriority="high" />`;
+        }
+        element.prepend(hints, { html: true });
+        this.hintsInjected = true;
+      }
+
       // Inject noindex for unpublished records
       if (this.metadata && this.metadata.is_published === false && !this.noindexInjected) {
         console.log('Injecting noindex meta tag for unpublished record');
@@ -384,6 +406,27 @@ class CustomHeaderHandler {
           element.append(inject, { html: true });
         }
         this.metaInjected = true;
+      }
+
+      // Lock <title> for bots: Vue overwrites document.title after mount with a generic
+      // listing-page title, making thousands of programmatic pages share identical titles.
+      // MutationObserver re-asserts the location-specific title whenever Vue tries to change it.
+      if (this.isBot && this.metadata && this.metadata.title && !this.titleLockInjected) {
+        // Escape </ so a title containing "</script>" can't break out of the inline script.
+        const titleJs = JSON.stringify(this.metadata.title).replace(/<\//g, '<\\/');
+        const lockScript =
+          `<script>(function(){` +
+            `var t=${titleJs};` +
+            `if(document.title!==t)document.title=t;` +
+            `var el=document.querySelector('title');` +
+            `if(el){new MutationObserver(function(){if(document.title!==t)document.title=t;})` +
+              `.observe(el,{childList:true,characterData:true,subtree:true});}` +
+            `new MutationObserver(function(){if(document.title!==t)document.title=t;})` +
+              `.observe(document.head,{childList:true,subtree:true});` +
+          `})();</script>`;
+        console.log('Injecting title-lock script for bot');
+        element.append(lockScript, { html: true });
+        this.titleLockInjected = true;
       }
 
       // Inject JSON-LD structured data script at the end of head
@@ -433,18 +476,19 @@ class CustomHeaderHandler {
         element.remove();
         return;
       }
-      // Rewrite hreflang alternate links: replace preview domain with production domain
-      // and replace :param placeholder with the actual location ID
-      if (rel === "alternate" && this.domainSource && this.currentPathname) {
+      // Rewrite hreflang alternate links: replace WeWeb staging host (matches both
+      // <uuid>-production.weweb.io and <uuid>.weweb-preview.io) with the prod domain,
+      // and substitute the :param placeholder with the actual location ID.
+      if (rel === "alternate" && this.currentPathname) {
         const href = element.getAttribute("href");
-        if (href && href.includes(this.domainSource)) {
-          const pathParts = this.currentPathname.split('/').filter((p: string) => p !== '');
-          const locationId = pathParts[pathParts.length - 1];
-          const newHref = href
-            .replace(this.domainSource, 'https://www.openlogistics.network')
-            .replace(':param', locationId);
-          element.setAttribute("href", newHref);
-          return;
+        if (href) {
+          const hostReplaced = href.replace(WEWEB_HOST_RE, PROD_HOST);
+          if (hostReplaced !== href) {
+            const pathParts = this.currentPathname.split('/').filter((p: string) => p !== '');
+            const locationId = pathParts[pathParts.length - 1];
+            element.setAttribute("href", hostReplaced.replace(':param', locationId));
+            return;
+          }
         }
       }
     }
