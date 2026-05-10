@@ -1,8 +1,12 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "weweb-dynamic-metadata-worker"
+account_id = "84cddba3c0f5831ab6badd3ac23edec3"
 main = "src/index.ts"
 compatibility_date = "2024-04-19"
 compatibility_flags = ["nodejs_compat"]
+routes = [
+  { pattern = "www.openlogistics.network/*", zone_name = "openlogistics.network" }
+]
 
 # Variable bindings. These are arbitrary, plaintext strings (similar to environment variables)
 # Docs:

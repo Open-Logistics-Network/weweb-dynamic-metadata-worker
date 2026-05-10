@@ -8,7 +8,7 @@ export const config = {
       // },
       {
         pattern: "/(en|de|es|fr|pt|it|ja|pl)/locations/[^/]+",
-        metaDataEndpoint: "https://xxgx-bhd0-k4hs.f2.xano.io/api:JyhvLhrj/location/metadata/{id}"
+        metaDataEndpoint: "https://xxgx-bhd0-k4hs.f2.xano.io/api:JyhvLhrj/location/metadata/{id}/{language_code}"
       }
       // Add more patterns and their metadata endpoints as needed
     ]
