@@ -1,0 +1,481 @@
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+
+// config.js
+var config = {
+  domainSource: "https://32c40fd2-9294-4e8d-b573-38afaf6cd060-production.weweb.io",
+  // Your WeWeb app preview link
+  patterns: [
+    // {
+    //   pattern: "/event/[^/]+",
+    //   metaDataEndpoint: "https://xeo6-2sgh-ehgj.n7.xano.io/api:8wD10mRd/event/{id}/meta"
+    // },
+    {
+      pattern: "/(en|de|es|fr|pt|it|ja|pl)/locations/[^/]+",
+      metaDataEndpoint: "https://xxgx-bhd0-k4hs.f2.xano.io/api:JyhvLhrj/location/metadata/{id}/{language_code}"
+    }
+    // Add more patterns and their metadata endpoints as needed
+  ]
+};
+
+// src/index.ts
+var index_default = {
+  async fetch(request, env, ctx) {
+    const domainSource = config.domainSource;
+    const patterns = config.patterns;
+    console.log("Worker started");
+    const url = new URL(request.url);
+    const ua = request.headers.get("user-agent") || "";
+    const isBot = /googlebot|bingbot|yandex|baiduspider|duckduckbot|slurp|facebookexternalhit|twitterbot|linkedinbot/i.test(ua);
+    if (url.protocol === "http:") {
+      url.protocol = "https:";
+      return Response.redirect(url.toString(), 301);
+    }
+    const bareLocationMatch = url.pathname.match(/^\/locations\/([^\/]+)\/?$/);
+    if (bareLocationMatch) {
+      return Response.redirect(
+        `https://${PROD_HOST}/en/locations/${bareLocationMatch[1]}/`,
+        301
+      );
+    }
+    const referer = request.headers.get("Referer");
+    function getPatternConfig(url2) {
+      for (const patternConfig of patterns) {
+        const regex = new RegExp(patternConfig.pattern);
+        let pathname = url2 + (url2.endsWith("/") ? "" : "/");
+        if (regex.test(pathname)) {
+          return patternConfig;
+        }
+      }
+      return null;
+    }
+    __name(getPatternConfig, "getPatternConfig");
+    function isPageData(url2) {
+      const pattern = /\/public\/data\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.json/;
+      return pattern.test(url2);
+    }
+    __name(isPageData, "isPageData");
+    async function requestMetadata(url2, metaDataEndpoint) {
+      try {
+        console.log("Requesting metadata for URL:", url2);
+        const urlObj = url2.startsWith("http") ? new URL(url2) : new URL(url2, "http://localhost");
+        const pathname = urlObj.pathname.endsWith("/") ? urlObj.pathname.slice(0, -1) : urlObj.pathname;
+        const parts = pathname.split("/").filter((p) => p !== "");
+        console.log("URL parts:", parts);
+        const id = parts[parts.length - 1];
+        const languageCode = parts[0];
+        console.log("Extracted ID:", id, "Language Code:", languageCode);
+        const metaDataEndpointWithValues = metaDataEndpoint.replace(/{id}/g, id).replace(/{language_code}/g, languageCode);
+        console.log("Fetching from metadata endpoint:", metaDataEndpointWithValues);
+        const metaDataResponse = await fetch(metaDataEndpointWithValues);
+        if (!metaDataResponse.ok) {
+          console.error("Metadata API returned error:", metaDataResponse.status);
+          return { metadata: null, languageCode, id };
+        }
+        const metadata = await metaDataResponse.json();
+        return { metadata, languageCode, id };
+      } catch (error) {
+        console.error("Critical error in requestMetadata:", error);
+        return { metadata: null, languageCode: "en", id: "unknown" };
+      }
+    }
+    __name(requestMetadata, "requestMetadata");
+    const isPrivateRoute = /^\/((en|de|es|fr|pt|it|ja|pl)\/)?(admin|dashboard|login|my-requests|my-locations)\/?$/.test(url.pathname);
+    const isCacheable = request.method === "GET" && !isPrivateRoute && !isPageData(url.pathname);
+    const cacheKey = isCacheable ? new Request(`${url.origin}/__cache__/${isBot ? "bot" : "user"}${url.pathname}${url.search}`, { method: "GET" }) : null;
+    if (cacheKey) {
+      const cached = await caches.default.match(cacheKey);
+      if (cached) {
+        const hitHeaders = new Headers(cached.headers);
+        hitHeaders.set("x-cache", "HIT");
+        return new Response(cached.body, { status: cached.status, headers: hitHeaders });
+      }
+    }
+    const response = await (async () => {
+      const patternConfig = getPatternConfig(url.pathname);
+      if (patternConfig) {
+        console.log("Dynamic page detected:", url.pathname);
+        let source = await fetch(`${domainSource}${url.pathname}${url.search}`, {
+          redirect: "follow"
+        });
+        const sourceHeaders = new Headers(source.headers);
+        sourceHeaders.delete("X-Robots-Tag");
+        source = new Response(source.body, {
+          status: source.status,
+          headers: sourceHeaders
+        });
+        const { metadata, languageCode } = await requestMetadata(url.pathname, patternConfig.metaDataEndpoint);
+        console.log("Metadata status:", !!metadata, "Lang:", languageCode);
+        sourceHeaders.set("x-worker-dynamic-metadata", "active");
+        sourceHeaders.set("x-metadata-status", metadata ? "success" : "missing");
+        const canonicalUrl = buildCanonicalUrl(url.pathname);
+        const customHeaderHandler = new CustomHeaderHandler(metadata, canonicalUrl, domainSource, url.pathname, isBot);
+        console.log("Transforming HTML with HTMLRewriter");
+        return new HTMLRewriter().on("*", customHeaderHandler).transform(new Response(source.body, {
+          status: source.status,
+          headers: sourceHeaders
+        }));
+      } else if (isPageData(url.pathname)) {
+        console.log("Page data detected:", url.pathname);
+        console.log("Referer:", referer);
+        const sourceResponse2 = await fetch(`${domainSource}${url.pathname}`, {
+          redirect: "manual"
+        });
+        let sourceData = await sourceResponse2.json();
+        let pathname = referer;
+        pathname = pathname ? pathname + (pathname.endsWith("/") ? "" : "/") : null;
+        if (pathname !== null) {
+          const patternConfigForPageData = getPatternConfig(pathname);
+          if (patternConfigForPageData) {
+            const { metadata, languageCode } = await requestMetadata(pathname, patternConfigForPageData.metaDataEndpoint);
+            console.log("Metadata fetched for SPA navigation:", !!metadata, languageCode);
+            const lang = languageCode || "en";
+            const data = sourceData;
+            data.page = data.page || {};
+            data.page.title = data.page.title || {};
+            data.page.meta = data.page.meta || {};
+            data.page.meta.desc = data.page.meta.desc || {};
+            data.page.meta.keywords = data.page.meta.keywords || {};
+            data.page.socialTitle = data.page.socialTitle || {};
+            data.page.socialDesc = data.page.socialDesc || {};
+            const metadataObj = metadata;
+            if (metadataObj && metadataObj.title) {
+              data.page.title[lang] = metadataObj.title;
+              data.page.socialTitle[lang] = metadataObj.title;
+            }
+            if (metadataObj && metadataObj.description) {
+              data.page.meta.desc[lang] = metadataObj.description;
+              data.page.socialDesc[lang] = metadataObj.description;
+            }
+            if (metadataObj && metadataObj.image) {
+              data.page.metaImage = metadataObj.image;
+            }
+            if (metadataObj && metadataObj.keywords) {
+              data.page.meta.keywords[lang] = metadataObj.keywords;
+            }
+            console.log(`Returning modified JSON for SPA (${lang})`);
+            return new Response(JSON.stringify(data), {
+              headers: {
+                "Content-Type": "application/json",
+                "x-worker-dynamic-metadata": "active-spa",
+                "x-metadata-status": "success"
+              }
+            });
+          }
+        }
+      }
+      console.log("Fetching original content for:", url.pathname);
+      const sourceUrl = new URL(`${domainSource}${url.pathname}${url.search}`);
+      const sourceResponse = await fetch(sourceUrl, {
+        redirect: "manual"
+      });
+      const modifiedHeaders = new Headers(sourceResponse.headers);
+      modifiedHeaders.delete("X-Robots-Tag");
+      if (sourceResponse.status >= 300 && sourceResponse.status < 400) {
+        const location = sourceResponse.headers.get("Location");
+        if (location) {
+          const redirectUrl = new URL(location, domainSource);
+          const newLocation = `${url.origin}${redirectUrl.pathname}${redirectUrl.search}`;
+          console.log("Rewriting redirect from:", location, "to:", newLocation);
+          modifiedHeaders.set("Location", newLocation);
+        }
+      }
+      const contentType = sourceResponse.headers.get("content-type") || "";
+      if (contentType.includes("text/html")) {
+        console.log("Transforming static HTML to remove staging domains");
+        const stagingScrubber = {
+          element(element) {
+            for (const attr of ["href", "content", "src"]) {
+              const val = element.getAttribute(attr);
+              if (!val) continue;
+              const replaced = val.replace(WEWEB_HOST_RE, PROD_HOST);
+              if (replaced !== val) {
+                element.setAttribute(attr, replaced);
+              }
+            }
+          }
+        };
+        const canonicalUrl = buildCanonicalUrl(url.pathname);
+        const canonicalInjector = {
+          element(element) {
+            element.append(`<link rel="canonical" href="${canonicalUrl}"/>`, { html: true });
+          }
+        };
+        const pathParts = url.pathname.split("/").filter((p) => p !== "");
+        const lang = pathParts[0] || "en";
+        const noscriptCopy = {
+          en: { h1: "Open Logistics Network", p: "Digital 3PL marketplace connecting shippers with global warehouse capacity. Enable JavaScript to explore our platform." },
+          de: { h1: "Open Logistics Network", p: "Digitaler 3PL-Marktplatz, der Verlader mit weltweiten Lagerkapazit\xE4ten verbindet. Aktivieren Sie JavaScript, um unsere Plattform zu erkunden." },
+          es: { h1: "Open Logistics Network", p: "Marketplace digital 3PL que conecta cargadores con capacidad de almacenamiento global. Active JavaScript para explorar nuestra plataforma." },
+          fr: { h1: "Open Logistics Network", p: "Marketplace 3PL num\xE9rique reliant les exp\xE9diteurs aux capacit\xE9s d'entrep\xF4t mondiales. Activez JavaScript pour explorer notre plateforme." },
+          pt: { h1: "Open Logistics Network", p: "Marketplace digital 3PL conectando embarcadores com capacidade de armaz\xE9m global. Ative o JavaScript para explorar nossa plataforma." },
+          it: { h1: "Open Logistics Network", p: "Marketplace digitale 3PL che collega spedizionieri con capacit\xE0 di magazzino globale. Abilita JavaScript per esplorare la nostra piattaforma." },
+          ja: { h1: "Open Logistics Network", p: "\u30B7\u30C3\u30D1\u30FC\u3068\u4E16\u754C\u306E\u5009\u5EAB\u30AD\u30E3\u30D1\u30B7\u30C6\u30A3\u3092\u3064\u306A\u3050\u30C7\u30B8\u30BF\u30EB3PL\u30DE\u30FC\u30B1\u30C3\u30C8\u30D7\u30EC\u30A4\u30B9\u3002\u30D7\u30E9\u30C3\u30C8\u30D5\u30A9\u30FC\u30E0\u3092\u5229\u7528\u3059\u308B\u306B\u306FJavaScript\u3092\u6709\u52B9\u306B\u3057\u3066\u304F\u3060\u3055\u3044\u3002" },
+          pl: { h1: "Open Logistics Network", p: "Cyfrowy marketplace 3PL \u0142\u0105cz\u0105cy nadawc\xF3w z globaln\u0105 pojemno\u015Bci\u0105 magazynow\u0105. W\u0142\u0105cz JavaScript, aby korzysta\u0107 z naszej platformy." }
+        };
+        const copy = noscriptCopy[lang] || noscriptCopy["en"];
+        const noscriptInjector = {
+          element(element) {
+            element.setInnerContent(
+              `<h1>${copy.h1}</h1><p>${copy.p}</p>`,
+              { html: true }
+            );
+          }
+        };
+        const capturedMeta = { title: "", description: "" };
+        const titleCapture = {
+          text(text) {
+            capturedMeta.title += text.text;
+          }
+        };
+        const metaDescriptionCapture = {
+          element(element) {
+            if (element.getAttribute("name") === "description") {
+              capturedMeta.description = element.getAttribute("content") || "";
+            }
+          }
+        };
+        const appContentInjector = {
+          element(element) {
+            if (!isBot) return;
+            const h1Text = capturedMeta.title || copy.h1;
+            const pText = capturedMeta.description || copy.p;
+            element.prepend(
+              `<div id="seo-prerender" style="font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px"><h1 style="font-size:1.5rem;margin-bottom:0.5em">${escapeHtml(h1Text)}</h1><p style="color:#555;line-height:1.5">${escapeHtml(pText)}</p></div>`,
+              { html: true }
+            );
+          }
+        };
+        const isHomePage = url.pathname === "/" || /^\/[a-z]{2}\/?$/i.test(url.pathname);
+        const seenPreloads = /* @__PURE__ */ new Set();
+        const preloadCleanup = {
+          element(element) {
+            if (element.getAttribute("rel") !== "preload") return;
+            const href = element.getAttribute("href");
+            if (!href) return;
+            if (!isHomePage && href.includes("Home_Background_Hero")) {
+              element.remove();
+              return;
+            }
+            const key = `${element.getAttribute("as") || ""}|${href}`;
+            if (seenPreloads.has(key)) {
+              element.remove();
+              return;
+            }
+            seenPreloads.add(key);
+          }
+        };
+        return new HTMLRewriter().on("title", titleCapture).on("meta", metaDescriptionCapture).on("link", stagingScrubber).on("link", preloadCleanup).on("meta", stagingScrubber).on("a", stagingScrubber).on("img", stagingScrubber).on("script", stagingScrubber).on("head", canonicalInjector).on("noscript", noscriptInjector).on('[id="app"]', appContentInjector).transform(new Response(sourceResponse.body, {
+          status: sourceResponse.status,
+          headers: modifiedHeaders
+        }));
+      }
+      return new Response(sourceResponse.body, {
+        status: sourceResponse.status,
+        headers: modifiedHeaders
+      });
+    })();
+    const isHtmlResponse = (response.headers.get("content-type") || "").includes("text/html");
+    if (cacheKey && response.status === 200 && isHtmlResponse && !response.headers.has("set-cookie")) {
+      const toCache = new Response(response.clone().body, response);
+      toCache.headers.set("Cache-Control", "s-maxage=900");
+      ctx.waitUntil(caches.default.put(cacheKey, toCache));
+    }
+    if (!cacheKey) return response;
+    const missHeaders = new Headers(response.headers);
+    missHeaders.set("x-cache", "MISS");
+    return new Response(response.body, { status: response.status, headers: missHeaders });
+  }
+};
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+__name(escapeHtml, "escapeHtml");
+var WEWEB_HOST_RE = /32c40fd2-9294-4e8d-b573-38afaf6cd060[\w.-]*\.weweb(-preview)?\.io/g;
+var PROD_HOST = "www.openlogistics.network";
+function buildCanonicalUrl(pathname) {
+  // Self-referential canonical: each localized page canonicals to itself so every
+  // language variant stays eligible for indexing, matching the self-referential
+  // hreflang alternates. (Previously this collapsed all non-en locales onto the
+  // /en/ URL, which told Google the translations were duplicates of the English
+  // page and de-indexed them.)
+  return `https://${PROD_HOST}${pathname}${pathname.endsWith("/") ? "" : "/"}`;
+}
+__name(buildCanonicalUrl, "buildCanonicalUrl");
+var CONFLICTING_NAMES = ["title", "description", "keywords", "image", "twitter:title", "twitter:description", "twitter:image"];
+var CONFLICTING_PROPERTIES = ["og:title", "og:description", "og:image"];
+var CONFLICTING_ITEMPROPS = ["name", "description", "image"];
+var CustomHeaderHandler = class {
+  static {
+    __name(this, "CustomHeaderHandler");
+  }
+  constructor(metadata, canonicalUrl = null, domainSource = null, currentPathname = null, isBot = false) {
+    this.metadata = metadata;
+    this.canonicalUrl = canonicalUrl;
+    this.domainSource = domainSource;
+    this.currentPathname = currentPathname;
+    this.noindexInjected = false;
+    this.scriptLdInjected = false;
+    this.metaInjected = false;
+    this.hintsInjected = false;
+    this.titleLockInjected = false;
+    this.isBot = isBot;
+  }
+  element(element) {
+    if (!this.metadata && !this.canonicalUrl) return;
+    if (element.tagName == "head") {
+      if (!this.hintsInjected) {
+        let hints = '<link rel="preconnect" href="https://xxgx-bhd0-k4hs.f2.xano.io" crossorigin />';
+        if (this.metadata && this.metadata.image) {
+          const img = escapeHtml(this.metadata.image);
+          hints += `<link rel="preload" as="image" href="${img}" fetchpriority="high" />`;
+        }
+        element.prepend(hints, { html: true });
+        this.hintsInjected = true;
+      }
+      if (this.metadata && this.metadata.is_published === false && !this.noindexInjected) {
+        console.log("Injecting noindex meta tag for unpublished record");
+        element.prepend('<meta name="robots" content="noindex">', { html: true });
+        this.noindexInjected = true;
+      }
+      if (!this.metaInjected) {
+        const m = this.metadata || {};
+        let inject = "";
+        if (m.title) {
+          const t = escapeHtml(m.title);
+          inject += `    <title>${t}</title>
+`;
+          inject += `    <meta name="title" content="${t}" />
+`;
+          inject += `    <meta property="og:title" content="${t}" />
+`;
+          inject += `    <meta name="twitter:title" content="${t}" />
+`;
+          inject += `    <meta itemprop="name" content="${t}" />
+`;
+        }
+        if (m.description) {
+          const d = escapeHtml(m.description);
+          inject += `    <meta name="description" content="${d}" />
+`;
+          inject += `    <meta property="og:description" content="${d}" />
+`;
+          inject += `    <meta name="twitter:description" content="${d}" />
+`;
+          inject += `    <meta itemprop="description" content="${d}" />
+`;
+        }
+        if (m.image) {
+          const img = escapeHtml(m.image);
+          inject += `    <meta name="image" content="${img}" />
+`;
+          inject += `    <meta property="og:image" content="${img}" />
+`;
+          inject += `    <meta name="twitter:image" content="${img}" />
+`;
+          inject += `    <meta itemprop="image" content="${img}" />
+`;
+        }
+        if (m.keywords) {
+          inject += `    <meta name="keywords" content="${escapeHtml(m.keywords)}" />
+`;
+        }
+        if (this.canonicalUrl) {
+          inject += `    <link rel="canonical" href="${escapeHtml(this.canonicalUrl)}" />
+`;
+        }
+        if (inject) {
+          console.log("Injecting meta tags into <head>");
+          element.append(inject, { html: true });
+        }
+        this.metaInjected = true;
+      }
+      if (this.metadata && this.metadata.title && !this.titleLockInjected) {
+        const titleJs = JSON.stringify(this.metadata.title).replace(/<\//g, "<\\/");
+        const lockScript = `<script>(function(){var t=${titleJs};if(document.title!==t)document.title=t;var el=document.querySelector('title');if(el){new MutationObserver(function(){if(document.title!==t)document.title=t;}).observe(el,{childList:true,characterData:true,subtree:true});}new MutationObserver(function(){if(document.title!==t)document.title=t;}).observe(document.head,{childList:true,subtree:true});})();<\/script>`;
+        console.log("Injecting title-lock script");
+        element.append(lockScript, { html: true });
+        this.titleLockInjected = true;
+      }
+      if (!this.scriptLdInjected && this.metadata && this.metadata.script_ld) {
+        try {
+          console.log("Injecting JSON-LD structured data script");
+          element.append(this.metadata.script_ld, { html: true });
+          this.scriptLdInjected = true;
+        } catch (error) {
+          console.error("Error injecting JSON-LD script:", error);
+        }
+      }
+      return;
+    }
+    if (element.tagName === "div" && element.getAttribute("id") === "app") {
+      if (!this.isBot) return;
+      const m = this.metadata || {};
+      const title = m.title ? escapeHtml(m.title) : "Open Logistics Network";
+      const description = m.description ? escapeHtml(m.description) : "";
+      let prerender = `<div id="seo-prerender" style="font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;padding:0 20px"><h1 style="font-size:1.5rem;margin-bottom:0.5em">${title}</h1>` + (description ? `<p style="color:#555;line-height:1.5">${description}</p>` : "") + `</div>`;
+      element.prepend(prerender, { html: true });
+      return;
+    }
+    if (element.tagName === "noscript") {
+      const m = this.metadata || {};
+      const title = m.title ? escapeHtml(m.title) : "Open Logistics Network";
+      const description = m.description ? escapeHtml(m.description) : "";
+      let content = `<h1>${title}</h1>`;
+      if (description) content += `<p>${description}</p>`;
+      element.setInnerContent(content, { html: true });
+      return;
+    }
+    if (element.tagName === "link") {
+      const rel = element.getAttribute("rel");
+      if (rel === "canonical" && this.canonicalUrl) {
+        element.remove();
+        return;
+      }
+      if (rel === "alternate" && this.currentPathname) {
+        const href = element.getAttribute("href");
+        if (href) {
+          const hostReplaced = href.replace(WEWEB_HOST_RE, PROD_HOST);
+          if (hostReplaced !== href) {
+            const pathParts = this.currentPathname.split("/").filter((p) => p !== "");
+            const locationId = pathParts[pathParts.length - 1];
+            element.setAttribute("href", hostReplaced.replace(":param", locationId));
+            return;
+          }
+        }
+      }
+    }
+    if (element.tagName == "title" && this.metadata && this.metadata.title) {
+      console.log("Removing existing <title> tag (replaced by injected one)");
+      element.remove();
+      return;
+    }
+    if (element.tagName == "meta" && this.metadata) {
+      const name = element.getAttribute("name");
+      const property = element.getAttribute("property");
+      const itemprop = element.getAttribute("itemprop");
+      if (name === "robots") {
+        if (this.metadata.is_published === false) {
+          console.log("Removing existing robots tag (keeping injected noindex for unpublished record)");
+          element.remove();
+        } else if (this.metadata.is_published === true) {
+          const content = element.getAttribute("content");
+          if (content === "noindex") {
+            console.log("Removing noindex tag (record is published)");
+            element.remove();
+          }
+        }
+        return;
+      }
+      if (name && CONFLICTING_NAMES.includes(name) || property && CONFLICTING_PROPERTIES.includes(property) || itemprop && CONFLICTING_ITEMPROPS.includes(itemprop)) {
+        console.log(`Removing conflicting existing meta tag: name=${name} property=${property} itemprop=${itemprop}`);
+        element.remove();
+        return;
+      }
+    }
+  }
+};
+export {
+  index_default as default
+};
+//# sourceMappingURL=index.js.map

@@ -16,11 +16,9 @@ export default {
     const ua = request.headers.get('user-agent') || '';
     const isBot = /googlebot|bingbot|yandex|baiduspider|duckduckbot|slurp|facebookexternalhit|twitterbot|linkedinbot/i.test(ua);
 
-    // Redirect HTTP → HTTPS
-    if (url.protocol === 'http:') {
-      url.protocol = 'https:';
-      return Response.redirect(url.toString(), 301);
-    }
+    // Note: HTTPS upgrade is handled by Cloudflare's edge. Doing it in the worker
+    // creates an infinite redirect loop when CloudFront sits in front (CloudFront
+    // terminates TLS and forwards to origin on HTTP).
 
     const referer = request.headers.get('Referer')
 
@@ -76,6 +74,23 @@ export default {
       }
     }
 
+    // Edge cache layer: skip private routes and page-data JSON; segment by bot vs user
+    // so injected SEO content for crawlers doesn't poison the regular-user cache entry.
+    const isPrivateRoute = /^\/((en|de|es|fr|pt|it|ja|pl)\/)?(admin|dashboard|login|my-requests|my-locations)\/?$/.test(url.pathname);
+    const isCacheable = request.method === 'GET' && !isPrivateRoute && !isPageData(url.pathname);
+    const cacheKey = isCacheable
+      ? new Request(`${url.origin}/__cache__/${isBot ? 'bot' : 'user'}${url.pathname}${url.search}`, { method: 'GET' })
+      : null;
+    if (cacheKey) {
+      const cached = await caches.default.match(cacheKey);
+      if (cached) {
+        const hitHeaders = new Headers(cached.headers);
+        hitHeaders.set('x-cache', 'HIT');
+        return new Response(cached.body, { status: cached.status, headers: hitHeaders });
+      }
+    }
+
+    const response = await (async (): Promise<Response> => {
     // Handle dynamic page requests
     const patternConfig = getPatternConfig(url.pathname);
     if (patternConfig) {
@@ -273,10 +288,33 @@ export default {
         }
       };
 
+      // Strip preloads that don't apply to the current page (e.g. hero image preload
+      // on non-home pages) and dedupe identical preloads emitted by WeWeb.
+      const isHomePage = url.pathname === '/' || /^\/[a-z]{2}\/?$/i.test(url.pathname);
+      const seenPreloads = new Set<string>();
+      const preloadCleanup = {
+        element(element: any) {
+          if (element.getAttribute('rel') !== 'preload') return;
+          const href = element.getAttribute('href');
+          if (!href) return;
+          if (!isHomePage && href.includes('Home_Background_Hero')) {
+            element.remove();
+            return;
+          }
+          const key = `${element.getAttribute('as') || ''}|${href}`;
+          if (seenPreloads.has(key)) {
+            element.remove();
+            return;
+          }
+          seenPreloads.add(key);
+        }
+      };
+
       return new HTMLRewriter()
         .on('title', titleCapture)
         .on('meta', metaDescriptionCapture)
         .on('link', stagingScrubber)
+        .on('link', preloadCleanup)
         .on('meta', stagingScrubber)
         .on('a', stagingScrubber)
         .on('img', stagingScrubber)
@@ -294,6 +332,19 @@ export default {
       status: sourceResponse.status,
       headers: modifiedHeaders,
     });
+    })();
+
+    // Cache successful HTML responses (no set-cookie) for 15 min at the edge.
+    const isHtmlResponse = (response.headers.get('content-type') || '').includes('text/html');
+    if (cacheKey && response.status === 200 && isHtmlResponse && !response.headers.has('set-cookie')) {
+      const toCache = new Response(response.clone().body, response);
+      toCache.headers.set('Cache-Control', 's-maxage=900');
+      ctx.waitUntil(caches.default.put(cacheKey, toCache));
+    }
+    if (!cacheKey) return response;
+    const missHeaders = new Headers(response.headers);
+    missHeaders.set('x-cache', 'MISS');
+    return new Response(response.body, { status: response.status, headers: missHeaders });
   }
 };
 
@@ -408,10 +459,10 @@ class CustomHeaderHandler {
         this.metaInjected = true;
       }
 
-      // Lock <title> for bots: Vue overwrites document.title after mount with a generic
+      // Lock <title>: Vue overwrites document.title after mount with a generic
       // listing-page title, making thousands of programmatic pages share identical titles.
       // MutationObserver re-asserts the location-specific title whenever Vue tries to change it.
-      if (this.isBot && this.metadata && this.metadata.title && !this.titleLockInjected) {
+      if (this.metadata && this.metadata.title && !this.titleLockInjected) {
         // Escape </ so a title containing "</script>" can't break out of the inline script.
         const titleJs = JSON.stringify(this.metadata.title).replace(/<\//g, '<\\/');
         const lockScript =
@@ -424,7 +475,7 @@ class CustomHeaderHandler {
             `new MutationObserver(function(){if(document.title!==t)document.title=t;})` +
               `.observe(document.head,{childList:true,subtree:true});` +
           `})();</script>`;
-        console.log('Injecting title-lock script for bot');
+        console.log('Injecting title-lock script');
         element.append(lockScript, { html: true });
         this.titleLockInjected = true;
       }
